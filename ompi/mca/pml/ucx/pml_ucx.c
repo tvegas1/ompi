@@ -82,6 +82,40 @@ mca_pml_ucx_module_t ompi_pml_ucx = {
 #define PML_UCX_REQ_ALLOCA() \
     ((char *)alloca(ompi_pml_ucx.request_size) + ompi_pml_ucx.request_size);
 
+static int mca_pml_ucx_loop(void)
+{
+    static int loop = -1;
+    const char *str;
+
+    if (loop == -1) {
+        str = getenv("UCXLOOP");
+        if (str && *str == 'y') {
+            loop = 1;
+        } else {
+            loop = 0;
+        }
+    }
+
+    return loop;
+}
+
+static int mca_pml_ucx_tag_log_full(void)
+{
+    static int enable = -1;
+    const char *str;
+
+    if (enable == -1) {
+        str = getenv("UCXDBG_FULL");
+        if (str && *str == 'y') {
+            enable = 1;
+        } else {
+            enable = 0;
+        }
+    }
+
+    return enable;
+}
+
 #if HAVE_UCP_WORKER_ADDRESS_FLAGS
 static int mca_pml_ucx_send_worker_address_type(int addr_flags, int modex_scope)
 {
@@ -547,7 +581,7 @@ int mca_pml_ucx_irecv_init(void *buf, size_t count, ompi_datatype_t *datatype,
     req->count                    = count;
     req->datatype.datatype        = mca_pml_ucx_get_datatype(datatype);
 
-    PML_UCX_MAKE_RECV_TAG(req->tag, req->recv.tag_mask, tag, src, comm);
+    PML_UCX_MAKE_RECV_TAG(req->tag, req->recv.tag_mask, tag, src, comm, count);
 
     *request = &req->ompi;
     return OMPI_SUCCESS;
@@ -568,7 +602,7 @@ int mca_pml_ucx_irecv(void *buf, size_t count, ompi_datatype_t *datatype,
     PML_UCX_TRACE_RECV("irecv request *%p", buf, count, datatype, src, tag, comm,
                        (void*)request);
 
-    PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm);
+    PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm, count);
 #if HAVE_DECL_UCP_TAG_RECV_NBX
     req = (ompi_request_t*)ucp_tag_recv_nbx(ompi_pml_ucx.ucp_worker, buf,
                                             mca_pml_ucx_get_data_size(op_data, count),
@@ -612,7 +646,7 @@ int mca_pml_ucx_recv(void *buf, size_t count, ompi_datatype_t *datatype, int src
 
     PML_UCX_TRACE_RECV("%s", buf, count, datatype, src, tag, comm, "recv");
 
-    PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm);
+    PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm, count);
 #if HAVE_DECL_UCP_TAG_RECV_NBX
     ucp_tag_recv_nbx(ompi_pml_ucx.ucp_worker, buf,
                      mca_pml_ucx_get_data_size(op_data, count),
@@ -677,7 +711,7 @@ int mca_pml_ucx_isend_init(const void *buf, size_t count, ompi_datatype_t *datat
     req->flags                    = MCA_PML_UCX_REQUEST_FLAG_SEND;
     req->buffer                   = (void *)buf;
     req->count                    = count;
-    req->tag                      = PML_UCX_MAKE_SEND_TAG(tag, comm);
+    req->tag                      = PML_UCX_MAKE_SEND_TAG(tag, comm, count);
     req->send.mode                = mode;
     req->send.ep                  = ep;
 
@@ -816,12 +850,12 @@ int mca_pml_ucx_isend(const void *buf, size_t count, ompi_datatype_t *datatype,
 
 #if HAVE_DECL_UCP_TAG_SEND_NBX
     req = (ompi_request_t*)mca_pml_ucx_common_send_nbx(ep, buf, count, datatype,
-                                                       PML_UCX_MAKE_SEND_TAG(tag, comm), mode,
+                                                       PML_UCX_MAKE_SEND_TAG(tag, comm, count), mode,
                                                        &mca_pml_ucx_get_op_data(datatype)->op_param.send);
 #else
     req = (ompi_request_t*)mca_pml_ucx_common_send(ep, buf, count, datatype,
                                                    mca_pml_ucx_get_datatype(datatype),
-                                                   PML_UCX_MAKE_SEND_TAG(tag, comm), mode,
+                                                   PML_UCX_MAKE_SEND_TAG(tag, comm, count), mode,
                                                    mca_pml_ucx_send_completion);
 #endif
 
@@ -920,13 +954,13 @@ int mca_pml_ucx_send(const void *buf, size_t count, ompi_datatype_t *datatype, i
     if (OPAL_LIKELY((MCA_PML_BASE_SEND_BUFFERED != mode) &&
                     (MCA_PML_BASE_SEND_SYNCHRONOUS != mode))) {
         return mca_pml_ucx_send_nbr(ep, buf, count, datatype,
-                                    PML_UCX_MAKE_SEND_TAG(tag, comm));
+                                    PML_UCX_MAKE_SEND_TAG(tag, comm, count));
     }
 #endif
 
     return mca_pml_ucx_send_nb(ep, buf, count, datatype,
                                mca_pml_ucx_get_datatype(datatype),
-                               PML_UCX_MAKE_SEND_TAG(tag, comm), mode,
+                               PML_UCX_MAKE_SEND_TAG(tag, comm, count), mode,
                                mca_pml_ucx_send_completion);
 }
 
@@ -941,7 +975,7 @@ int mca_pml_ucx_iprobe(int src, int tag, struct ompi_communicator_t* comm,
 
     PML_UCX_TRACE_PROBE("iprobe", src, tag, comm);
 
-    PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm);
+    PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm, 0);
     ucp_msg = ucp_tag_probe_nb(ompi_pml_ucx.ucp_worker, ucp_tag, ucp_tag_mask,
                                0, &info);
     if (ucp_msg != NULL) {
@@ -964,7 +998,7 @@ int mca_pml_ucx_probe(int src, int tag, struct ompi_communicator_t* comm,
 
     PML_UCX_TRACE_PROBE("probe", src, tag, comm);
 
-    PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm);
+    PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm, 0);
 
     MCA_COMMON_UCX_PROGRESS_LOOP(ompi_pml_ucx.ucp_worker) {
         ucp_msg = ucp_tag_probe_nb(ompi_pml_ucx.ucp_worker, ucp_tag,
@@ -988,7 +1022,7 @@ int mca_pml_ucx_improbe(int src, int tag, struct ompi_communicator_t* comm,
 
     PML_UCX_TRACE_PROBE("improbe", src, tag, comm);
 
-    PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm);
+    PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm, 0);
     ucp_msg = ucp_tag_probe_nb(ompi_pml_ucx.ucp_worker, ucp_tag, ucp_tag_mask,
                                1, &info);
     if (ucp_msg != NULL) {
@@ -1014,7 +1048,7 @@ int mca_pml_ucx_mprobe(int src, int tag, struct ompi_communicator_t* comm,
 
     PML_UCX_TRACE_PROBE("mprobe", src, tag, comm);
 
-    PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm);
+    PML_UCX_MAKE_RECV_TAG(ucp_tag, ucp_tag_mask, tag, src, comm, 0);
     MCA_COMMON_UCX_PROGRESS_LOOP(ompi_pml_ucx.ucp_worker) {
         ucp_msg = ucp_tag_probe_nb(ompi_pml_ucx.ucp_worker, ucp_tag, ucp_tag_mask,
                                    1, &info);

@@ -39,13 +39,22 @@ enum {
 #define PML_UCX_TAG_MASK                       0x7fffff0000000000ul
 
 
-#define PML_UCX_MAKE_SEND_TAG(_tag, _comm) \
+#define PML_UCX_MAKE_SEND_TAG(_tag, _comm, _count) \
+    ({ \
+     if (((uint64_t)_tag) >= (1LLU<<PML_UCX_TAG_BITS)) { \
+        if (((_tag) > 0) || mca_pml_ucx_tag_log_full() || (_tag < -27)) { \
+            PML_UCX_ERROR("SEND Tag too big: 0x%x/%d count %zu", _tag, _tag, _count); \
+            while (mca_pml_ucx_loop()) {\
+            } \
+        } \
+     } \
     ((((uint64_t) (_tag)            ) << (PML_UCX_RANK_BITS + PML_UCX_CONTEXT_BITS)) | \
      (((uint64_t)(_comm)->c_my_rank ) << PML_UCX_CONTEXT_BITS) | \
-     ((uint64_t)(_comm)->c_contextid))
+     ((uint64_t)(_comm)->c_contextid)); \
+    })
 
 
-#define PML_UCX_MAKE_RECV_TAG(_ucp_tag, _ucp_tag_mask, _tag, _src, _comm) \
+#define PML_UCX_MAKE_RECV_TAG(_ucp_tag, _ucp_tag_mask, _tag, _src, _comm, _count) \
     { \
         if ((_src) == MPI_ANY_SOURCE) { \
             _ucp_tag_mask = PML_UCX_ANY_SOURCE_MASK; \
@@ -57,6 +66,13 @@ enum {
                    (_comm)->c_contextid; \
         \
         if ((_tag) != MPI_ANY_TAG) { \
+             if (((uint64_t)_tag) >= (1LLU<<PML_UCX_TAG_BITS)) { \
+                if (((_tag) > 0) || mca_pml_ucx_tag_log_full() || (_tag < -27)) { \
+                    PML_UCX_ERROR("RECV Tag too big: 0x%x/%d count %zu", _tag, _tag, _count); \
+                    while (mca_pml_ucx_loop()) {\
+                    } \
+                } \
+             } \
             _ucp_tag_mask |= PML_UCX_TAG_MASK; \
             _ucp_tag      |= ((uint64_t)(_tag)) << (PML_UCX_RANK_BITS + PML_UCX_CONTEXT_BITS); \
         } \
